@@ -274,19 +274,156 @@ that means the self-exclusion as an id filter on `findActiveByRoom` and
 read the first failing assertion and fix the code myself instead of prompting
 again.
 
-**The evidence.** Name the task from Milestone 1. Paste the result line of its
-gate command (run it without `-q` so the line is in the output) and the result
-line of one `mvn -B clean test` run after the task was finished. The module
-gate cannot see a cross-module compile break on a warm tree. A cold build can,
-and so can CI.
+### The evidence
 
-**The diff.** The files the agent changed, and how each one maps to that task's
-declared scope (plain `git diff` leaves out new files, but
-`git add -N . && git diff --stat` includes them). Note anything it touched that
-you did not expect, including any shipped test. Then quote the one line you
-read hardest and say what you were checking for.
+Task T1, run in Claude Code under the Milestone 2 permission rules. The gate
+was green on the first attempt and no takeover trigger fired.
 
-**The refuter.** What you gave it and what you asked it to do (paste the
-brief). Then the one finding you settled, and how (the new failing test with
-its red run, or the evidence that dismissed it). If nothing it reported held
-up, say how you checked its strongest claim.
+Gate, `mvn -B -pl core-domain -am test` (167 shipped tests plus 37 new):
+
+```
+[INFO] Tests run: 204, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+```
+
+Closing `mvn -B clean test`, after the task was finished:
+
+```
+[INFO] Tests run: 204, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 63, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 41, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 19, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 19, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 78, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 31, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+```
+
+The rest of T1's checkpoint: `mvn -q -DskipTests test-compile` over the whole
+reactor printed nothing (billing, cli, and http-api still compile against the
+new `Booking`); the rule 3 grep came back empty; the rule 4 grep names only
+`BookingService.java`, with the same four call sites as shipped. `pytest` from
+`analytics/`: `137 passed`, unchanged.
+
+After settling the refuter's finding (two more tests, both probe files
+deleted), a final `mvn -B clean test` was green again: core-domain
+`Tests run: 206, Failures: 0, Errors: 0, Skipped: 0`, every other module as
+above, `BUILD SUCCESS`; `pytest` `137 passed`.
+
+### The diff
+
+`git add -N . && git diff --stat`: 5 files changed, 677 insertions, 7
+deletions, all under `core-domain/src/`.
+
+| File | In T1's declared scope | What changed |
+|---|---|---|
+| `main/.../core/domain/Booking.java` (+23 −5) | Yes | New `history` component (`List<BookingChange>`, copied unmodifiable). `confirmed(...)` keeps its signature and starts with an empty history; `cancelled()` keeps the history; new `modified(newInterval, newAttendees, at)` returns a copy with one more history entry and the same id, room, owner, status, and creation time. |
+| `main/.../core/domain/BookingChange.java` (new, 42) | Yes | One history entry: when, previous interval and attendees, new interval and attendees. Refuses to record a change that changes nothing. |
+| `main/.../core/domain/ModificationResult.java` (new, 65) | Yes | Sealed result shaped like `CancellationResult`: `Modified(booking, previous, promotions)` with `changed()`, and `Rejected(reason, detail)` using existing `RejectionReason` values only. |
+| `main/.../core/service/BookingService.java` (+86 −2) | Yes | New `modifyBooking(bookingId, requesterId, Optional<TimeInterval>, OptionalInt)` and a private `otherThan` helper. Constructor unchanged. Order: exists, `checkCancellable` (clause 1), no-op returns before any write (clause 5), room exists and `checkRequest` (clause 3), own calendar then room via `ConflictChecker` without the booking itself and with no cap check (clause 2), save, `promoteWaitlist` only if the interval changed (clause 4). |
+| `test/.../core/service/BookingServiceModifyTest.java` (new, 486) | Yes | 37 tests from the run in one nested group per clause, using only the shipped `BookingServiceTestBase` and fixtures, plus 2 clause 4 tests added afterwards as evidence when settling the refuter's finding (below). |
+
+Nothing outside `core-domain/` changed, no shipped test or test-support file
+was touched, and neither the `BookingService` constructor nor
+`Booking.confirmed(...)` changed signature. The one thing worth flagging:
+`Booking`'s canonical constructor gained the `history` parameter, as the
+history design calls for; its only caller is `Booking.java` itself, which the
+whole-reactor compile confirms.
+
+**The line I read hardest**, in `BookingService.java`:
+
+```java
+return held.stream().filter(other -> !other.id().equals(booking.id())).toList();
+```
+
+What I was checking for: that the booking being modified is dropped by its id,
+not by comparing times; that this filtered list, and not a hand-written
+comparison, goes into `conflictChecker.hasConflict`, so `TimeInterval.overlaps`
+stays the only overlap test (rule 3); and that it is applied to both the
+owner's calendar and the room, since missing either one makes a one-slot nudge
+collide with itself (`nudgingByOneSlotIsAllowed` covers that).
+
+### The refuter
+
+A fresh Claude Code session in `f26-lab08/`, given `CHANGE-REQUEST.md`, the
+T1 diff saved with `git add -N . && git diff`, and the scope line in the brief,
+and nothing else from the run. The brief:
+
+> You are reviewing one change to a Java room-booking platform. Your job is to
+> break it, not to fix it.
+>
+> Use only these three inputs: `CHANGE-REQUEST.md`; `refuter/t1.diff`, the
+> change under review; and this one-line scope: "T1: `BookingService.modifyBooking`
+> lets the owner change the interval and/or attendee count of an upcoming
+> booking in the same room, under every booking-request rule, re-checking the
+> room and the owner's own calendar while ignoring the booking itself, with the
+> per-user booking cap waived; a rejected modification changes nothing, a
+> modification that changes nothing records nothing, and an interval change
+> runs the existing first-in-first-out waitlist promotion. core-domain only; no
+> event, notification, HTTP, or analytics yet." You may read the source under
+> `core-domain/`. Do not open `PLAN.md`, `LAB08-PLAN.md`, or any other file in
+> `refuter/`.
+>
+> Find inputs or call sequences where this change does the wrong thing against
+> CHANGE-REQUEST.md clauses 1 to 5. Events, notifications, HTTP, analytics, and
+> billing are outside this change. Write each suspected problem as a JUnit 5
+> test in one new file, `RefuterProbeTest.java` in
+> `core-domain/src/test/java/edu/cmu/cs214/campusreserve/core/service/`,
+> extending `BookingServiceTestBase`, asserting what CHANGE-REQUEST.md says
+> should happen; run `mvn -B -pl core-domain test -Dtest=RefuterProbeTest`; a
+> finding counts only if its test fails. Places to start: a booker at the
+> booking cap; a rejected modification leaving any trace; an attendee-only
+> change or a lengthening when someone on the waitlist could already be
+> promoted; boundary times; the booker's own bookings in other rooms;
+> modifications that change nothing, written in different ways. Do not edit or
+> delete any existing file, do not fix the code, do not commit. Report each
+> finding with its test, the failing line, the CHANGE-REQUEST.md sentence it
+> violates, and your confidence; list the claims that did not fail; end with
+> the single strongest finding.
+
+### The finding settled
+
+The refuter wrote 30 probes in `RefuterProbeTest.java`: 26 passed and 4
+failed, all for one reason, which was its strongest finding. **A modification
+that only lengthens a booking still promotes a waiter whose slot was already
+free.** Its setup: u-2 waits for 10:00–11:00 in r-1; that slot frees while
+u-2 holds 10:00–11:00 in r-2, so the pass skips u-2; u-2 then cancels in r-2,
+which runs only r-2's pass, leaving u-2 waiting on a free slot in r-1; then u-3
+lengthens 16:00–17:00 to 16:00–18:00 in r-1, and the pass seats u-2.
+
+**Reproduced** as our own new test,
+`LengtheningFindingTest.aLengtheningPromotesNobodyEvenWithAWaiterLeftBehind`,
+which asserts the refuter's reading of clause 4 ("Running the pass and
+promoting nobody is the right outcome there"). Red run,
+`mvn -B -pl core-domain test -Dtest=LengtheningFindingTest`:
+
+```
+[ERROR]   LengtheningFindingTest.aLengtheningPromotesNobodyEvenWithAWaiterLeftBehind:35 expected: <[]> but was: <[u-2]>
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0
+```
+
+**Dismissed** with evidence:
+
+1. Clause 4 fixes the mechanism: "Time that a successful modification frees up
+   triggers the same first in, first out waitlist promotion that a
+   cancellation triggers today", and "The promotion pass runs when a
+   successful modification changed the interval." A lengthening changes the
+   interval, so the pass runs, and it is the cancellation's pass, which walks
+   the room's whole waitlist. "Promoting nobody" is what that pass does when
+   nobody is waiting on a slot that is already free, which is the case the
+   clause describes ("frees nothing").
+2. A run shows the shipped cancellation does exactly the same. From the same
+   setup, `aCancellationInTheSameRoomSeatsTheSameWaiter` cancels u-3's
+   unrelated booking in r-1 and u-2 is seated in 10:00–11:00, just as
+   `aLengtheningRunsTheSamePassAndCanSeatAWaiterLeftBehind` shows for the
+   lengthening. `mvn -B -pl core-domain test -Dtest='BookingServiceModifyTest*'`:
+   `Tests run: 39, Failures: 0, Errors: 0, Skipped: 0`.
+3. The promotion keeps both rule 4 properties: first in, first out, and
+   re-checked against the room and the waiter's own calendar, so it cannot
+   double-book.
+
+The stranded waiter comes from shipped behavior that predates T1: cancelling a
+booking runs only that room's pass, so a waiter skipped in r-1 is not
+reconsidered when their own blocker in r-2 goes away. That is outside this
+change request. `LengtheningFindingTest.java` and the refuter's
+`RefuterProbeTest.java` were deleted after their runs; neither is committed.
