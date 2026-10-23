@@ -249,10 +249,30 @@ Run exactly ONE task from your plan with the agent, under the guardrail, through
 its gate. Any task whose dependencies are done qualifies, including the
 smallest one.
 
-**The takeover point.** Write this before you start the run. A concrete,
-conditional statement of when you would stop the agent and write the code
-yourself. "If something looks wrong" does not count. Name the trigger and name
-what you would do.
+**The task.** T1, modify a booking in the domain. It is the only task in
+Milestone 1 with no unfinished dependencies.
+
+### The takeover point
+
+Written and committed before the run starts. I stop the agent and take over
+the moment any one of these happens:
+
+1. `git add -N . && git diff --stat` lists a file outside `core-domain/` (other
+   than `PLAN.md`), or any existing file under `core-domain/src/test/`.
+2. The diff adds `isBefore`, `isAfter`, `compareTo`, or `overlaps` on any line
+   under `core-domain/src/main` (the rule 3 grep from Milestone 1 is not
+   empty).
+3. The agent proposes changing the `BookingService` constructor or the
+   signature of `Booking.confirmed(...)`.
+4. The core-domain gate is still red after the agent's second attempt at the
+   same failure.
+
+What I do then: interrupt the run, `git restore` the offending files (or
+`git stash -u` the whole attempt), and write that piece myself. For trigger 2,
+that means the self-exclusion as an id filter on `findActiveByRoom` and
+`findActiveByUser`, handed to `ConflictChecker.hasConflict`. For trigger 4, I
+read the first failing assertion and fix the code myself instead of prompting
+again.
 
 **The evidence.** Name the task from Milestone 1. Paste the result line of its
 gate command (run it without `-q` so the line is in the output) and the result
