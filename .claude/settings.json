@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(/billing/**)",
+      "Edit(/accounts/**)",
+      "Edit(/cli/**)",
+      "Edit(/AGENTS.md)",
+      "Edit(/CLAUDE.md)",
+      "Edit(/CHANGE-REQUEST.md)",
+      "Edit(/.claude/**)",
+      "Edit(/guardrails/**)",
+      "Bash(git push:*)",
+      "Bash(rm *)",
+      "Bash(sudo *)"
+    ]
+  }
+}

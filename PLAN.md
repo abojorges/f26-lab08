@@ -178,14 +178,68 @@ over `http-api/src/main`.
 
 ## Milestone 2: The guardrail
 
-Pick one recipe from `guardrails/README.md`. Configure it, then prove it binds.
+### The recipe
 
-**The recipe.** Which one you picked, the exact paths or trees it covers, and
-one line on what it cannot catch.
+Recipe A, the permission boundary. `.claude/settings.json` at the repository
+root was generated from the `permissions` block of
+`guardrails/settings-snippet.json`, with the placeholders replaced by the three
+out-of-scope modules from Milestone 1. The agent's session runs with
+`f26-lab08/` as its working directory, so the leading `/` anchors there.
 
-**The captured block.** Paste the excerpt of the agent's own turn showing what
-you asked it to do, its tool call, and the block the guardrail returned. A bare
-terminal paste with no agent turn around it does not show the boundary binding.
+- `Edit(/billing/**)`, `Edit(/accounts/**)`, `Edit(/cli/**)`: the out-of-scope
+  modules.
+- `Edit(/AGENTS.md)`, `Edit(/CLAUDE.md)`, `Edit(/CHANGE-REQUEST.md)`: the
+  conventions the agent is judged against.
+- `Edit(/.claude/**)`, `Edit(/guardrails/**)`: the agent cannot rewrite its own
+  boundary with its file tools.
+- `Bash(git push:*)`, `Bash(rm *)`, `Bash(sudo *)`.
+
+**What it cannot catch.** The deny rules cover the agent's file tools, not
+the shell: a `sed -i`, `cp`, or script run through Bash can still write under
+`billing/`, and an in-bounds edit in `core-domain` (for example to `Booking`)
+can change what `billing` charges without touching a denied file.
+
+### Recipe C was tried first and did not bind
+
+I first configured recipe C (`protected-trees.txt` = `billing`, `accounts`,
+`cli`) and ran `lockdown.sh` at about 22:11:52 on Oct 22. Right after, the
+`src/` directories were read-only and a shell `touch billing/src/probe.txt`
+failed with "Permission denied". Within 2 to 5 seconds (directory change times
+22:11:55–58), something on this machine outside the agent set every directory
+in the three `src/` trees back to `drwx------`. The files stayed
+`-r--r--r--`, but the Edit tool writes a new copy and renames it into place,
+which needs only directory write permission: the probe edit to `Money.java`
+went through at 22:13:35, and the file kept its read-only mode. Locking again
+at 22:16:02 was undone again by 22:16:04–05. I restored `Money.java` from git,
+removed the probe file, ran `unlock.sh`, restored `protected-trees.txt`, and
+switched to recipe A, which the agent tool enforces itself.
+
+### The captured block
+
+Claude Code, Manual mode, session working directory `f26-lab08/`. A screenshot
+of the same turn is kept for recitation.
+
+```
+User:  Use your Edit tool to add the comment line // guardrail probe at the top
+       of billing/src/main/java/edu/cmu/cs214/campusreserve/billing/Money.java.
+
+Agent: Read  billing/src/main/java/edu/cmu/cs214/campusreserve/billing/Money.java
+       -> 1  package edu.cmu.cs214.campusreserve.billing;
+
+Agent: Edit  billing/src/main/java/edu/cmu/cs214/campusreserve/billing/Money.java
+       old:  package edu.cmu.cs214.campusreserve.billing;
+       new:  // guardrail probe
+             package edu.cmu.cs214.campusreserve.billing;
+       -> Error: File is in a directory that is denied by your permission settings.
+
+Agent: Bash  git status --short && git diff --stat -- billing && head -1 .../Money.java
+       -> ?? .claude/
+          ?? LAB08-PLAN.md
+          package edu.cmu.cs214.campusreserve.billing;
+```
+
+The deny rule fired before Manual mode's approval prompt, so no prompt
+appeared. `git status` shows nothing under `billing/`: the file is unchanged.
 
 ---
 
